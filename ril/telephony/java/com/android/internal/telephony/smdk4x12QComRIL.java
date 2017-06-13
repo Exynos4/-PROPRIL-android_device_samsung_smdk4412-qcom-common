@@ -34,6 +34,7 @@ import android.text.TextUtils;
 import android.telephony.Rlog;
 
 import android.telephony.SignalStrength;
+
 import android.telephony.PhoneNumberUtils;
 import com.android.internal.telephony.RILConstants;
 import com.android.internal.telephony.gsm.SmsBroadcastConfigInfo;
@@ -59,16 +60,17 @@ import com.android.internal.telephony.uicc.IccUtils;
  */
 public class smdk4x12QComRIL extends RIL implements CommandsInterface {
 
+    private boolean setPreferredNetworkTypeSeen = false;
+
     private AudioManager mAudioManager;
 
     private Object mSMSLock = new Object();
     private boolean mIsSendingSMS = false;
     protected boolean isGSM = false;
-
     public static final long SEND_SMS_TIMEOUT_IN_MS = 30000;
 
-    public smdk4x12QComRIL(Context context, int preferredNetworkType, int cdmaSubscription) {
-        this(context, preferredNetworkType, cdmaSubscription, null);
+    public smdk4x12QComRIL(Context context, int networkModes, int cdmaSubscription) {
+        this(context, networkModes, cdmaSubscription, null);
         mAudioManager = (AudioManager)mContext.getSystemService(Context.AUDIO_SERVICE);
     }
 
@@ -213,7 +215,6 @@ public class smdk4x12QComRIL extends RIL implements CommandsInterface {
         isGSM = (phoneType != RILConstants.CDMA_PHONE);
     }
 
-    @Override
     protected Object
     responseCallList(Parcel p) {
         int num;
@@ -239,16 +240,18 @@ public class smdk4x12QComRIL extends RIL implements CommandsInterface {
             dc.isMT = (0 != p.readInt());
             dc.als = p.readInt();
             voiceSettings = p.readInt();
-            dc.isVoice = (0 != voiceSettings);
-            int call_type = p.readInt();            // Samsung CallDetails
-            int call_domain = p.readInt();          // Samsung CallDetails
-            String csv = p.readString();            // Samsung CallDetails
+            dc.isVoice = (0 == voiceSettings) ? false : true;
             dc.isVoicePrivacy = (0 != p.readInt());
+            if (isGSM) {
+                p.readInt();
+                p.readInt();
+                p.readString();
+            }
             dc.number = p.readString();
             int np = p.readInt();
             dc.numberPresentation = DriverCall.presentationFromCLIP(np);
             dc.name = p.readString();
-            dc.namePresentation = DriverCall.presentationFromCLIP(p.readInt());
+            dc.namePresentation = p.readInt();
             int uusInfoPresent = p.readInt();
             if (uusInfoPresent == 1) {
                 dc.uusInfo = new UUSInfo();
@@ -305,7 +308,10 @@ public class smdk4x12QComRIL extends RIL implements CommandsInterface {
             case RIL_UNSOL_RIL_CONNECTED:
                 ret = responseInts(p);
                 setRadioPower(false, null);
-                setPreferredNetworkType(mPreferredNetworkType, null);
+                if (!setPreferredNetworkTypeSeen) {
+                    Rlog.v(RILJ_LOG_TAG, "smdk4x12QComRIL: connected, setting network type to " + mPreferredNetworkType);
+                    setPreferredNetworkType(mPreferredNetworkType, null);
+                }
                 setCdmaSubscriptionSource(mCdmaSubscription, null);
                 if(mRilVersion >= 8)
                     setCellInfoListRate(Integer.MAX_VALUE, null);
@@ -536,6 +542,8 @@ public class smdk4x12QComRIL extends RIL implements CommandsInterface {
         super.notifyRegistrantsCdmaInfoRec(infoRec);
     }
 
+
+
     @Override
     protected Object
     responseSMS(Parcel p) {
@@ -555,9 +563,9 @@ public class smdk4x12QComRIL extends RIL implements CommandsInterface {
 
         rr.mParcel.writeString(address);
         rr.mParcel.writeInt(clirMode);
-        rr.mParcel.writeInt(0);     // CallDetails.call_type
-        rr.mParcel.writeInt(1);     // CallDetails.call_domain
-        rr.mParcel.writeString(""); // CallDetails.getCsvFromExtras
+        rr.mParcel.writeInt(0);
+        rr.mParcel.writeInt(1);
+        rr.mParcel.writeString("");
 
         if (uusInfo == null) {
             rr.mParcel.writeInt(0); // UUS information is absent
@@ -642,22 +650,14 @@ public class smdk4x12QComRIL extends RIL implements CommandsInterface {
         }
     }
 
-    protected Object
-    responseFailCause(Parcel p) {
-        int numInts;
-        int response[];
+    @Override
+    public void setPreferredNetworkType(int networkType , Message response) {
+        riljLog("setPreferredNetworkType: " + networkType);
 
-        numInts = p.readInt();
-        response = new int[numInts];
-        for (int i = 0 ; i < numInts ; i++) {
-            response[i] = p.readInt();
+        if (!setPreferredNetworkTypeSeen) {
+            setPreferredNetworkTypeSeen = true;
         }
-        LastCallFailCause failCause = new LastCallFailCause();
-        failCause.causeCode = response[0];
-        if (p.dataAvail() > 0) {
-          failCause.vendorCause = p.readString();
-        }
-        return failCause;
+
+        super.setPreferredNetworkType(networkType, response);
     }
 }
-
